@@ -1,163 +1,93 @@
-import argparse
-import glob
 import os
-from pathlib import Path
-import sys
+import argparse
+import spacy
+import glob
 
-from project1 import redact_pipeline
-from project1.models import Settings
+def redact_text(input_files, output_dir, censor_flags, stats_output):
 
-
-def main(settings: Settings):
-    """Redacts each file using project1 module
-
-    Parameters
-    ----------
-    settings    : Parsed command line args as an instance of Settings class
-    """
-
-    # Getting input files
-    input_files = []
-    for i in settings.input:
-        input_files += glob.glob(i)
-
-    print('\nFiles processing ->', input_files, '\n')
-
-    process_stats = []
+    print("Input files:", input_files)
+    print("Output directory:", output_dir)
+    print("Censor flags:", censor_flags)
+    print("Stats output:", stats_output)
+    # Load spaCy model
+    nlp = spacy.load("en_core_web_sm")
+    
+    # Initialize statistics
+    stats = {"total_files": 0, "censored_items": {}}
+    
     for input_file in input_files:
-        redacted_txt = ""
+        print("Processing file:", input_file)
+        with open(input_file, 'r') as f:
+            text = f.read()
+        
+        # Process text with spaCy
+        doc = nlp(text)
+        
+        # Initialize list to store censored items
+        censored_items = []
+        
+        # Iterate over entities and censor based on flags
+        for ent in doc.ents:
+            if "names" in censor_flags and ent.label_ == "PERSON":
+                censored_items.append(ent.text)
+                text = text.replace(ent.text, "█")
+                
+            if "dates" in censor_flags and ent.label_ == "DATE":
+                censored_items.append(ent.text)
+                text = text.replace(ent.text, "█")
+                
+            if "phones" in censor_flags and ent.label_ == "PHONE":
+                censored_items.append(ent.text)
+                text = text.replace(ent.text, "█")
 
-        input_file_path = Path(input_file).resolve()
-        # Try-except block to catch any file access or file reading errors
-        try:
-            # Reads the content of the given file and starts the redaction
-            # process
-            with open(input_file_path, 'r') as in_f:
-                unredacted_txt = in_f.read()
-                redacted_txt, stats = redact_pipeline(
-                    unredacted_txt,
-                    redacts=settings.redacts,
-                    concepts=settings.concepts)
+            if "address" in censor_flags and ent.label_ == "ADDRESS":
+                censored_items.append(ent.text)
+                text = text.replace(ent.text, "█")
+                
+        # Write censored text to new file
+        output_file = os.path.join(output_dir, os.path.basename(input_file) + ".censored")
+        with open(output_file, 'w') as f:
+            f.write(text)
+        
+        # Update statistics
+        stats["total_files"] += 1
+        stats["censored_items"][os.path.basename(input_file)] = censored_items
+    
+    # Write statistics to output file or stderr/stdout
+    with open(stats_output, 'w') as f:
+        f.write("Total files processed: {}\n".format(stats["total_files"]))
+        for file, items in stats["censored_items"].items():
+            f.write("File: {}\n".format(file))
+            f.write("Censored items: {}\n".format(", ".join(items)))
+            f.write("\n")
 
-                process_stats.append(
-                    f"========== Stats:{input_file} ==========\n{stats}")
+def main():
+    parser = argparse.ArgumentParser(description='Text redaction system')
+    parser.add_argument('--input', nargs='+', help='Input files or glob pattern')
+    parser.add_argument('--output', help='Output directory for censored files')
+    parser.add_argument('--names', action='store_true', help='Censor names')
+    parser.add_argument('--dates', action='store_true', help='Censor dates')
+    parser.add_argument('--phones', action='store_true', help='Censor phone numbers')
+    parser.add_argument('--address', action='store_true', help='Censor addresses')
+    parser.add_argument('--stats', help='Statistics output file or special file (stderr, stdout)')
+    
+    args = parser.parse_args()
+    print("Parsed arguments:", args)
+    
+    input_files = glob.glob("./docs/input/*.txt")
+    output_dir = glob.glob(args.output)
+    censor_flags = []
+    if args.names:
+        censor_flags.append("names")
+    if args.dates:
+        censor_flags.append("dates")
+    if args.phones:
+        censor_flags.append("phones")
+    if args.address:
+        censor_flags.append("address")
+    stats_output = args.stats
+    
+    redact_text(input_files, output_dir, censor_flags, stats_output)
 
-        except BaseException:
-            # Exception is written to StdErr and loop is continued for other
-            # remaining files
-            sys.stderr.write(f'Could not read and redact {input_file}\n\n')
-            continue
-
-        if settings.output == 'stdout' or settings.output == 'stderr':
-            print(f'Redacting {input_file} ->')
-            output_to_std(redacted_txt, settings.output)
-        else:
-            # Generating output path and creating any parent folders in the path
-            # irrespective of OS (Windows or Posix)
-            output_file_folder = Path(
-                os.path.join(
-                    settings.output,
-                    input_file)).parent
-            output_file_folder.resolve().mkdir(parents=True, exist_ok=True)
-            output_file = Path(os.path.join(
-                output_file_folder,
-                f'{Path(input_file).stem}.redacted'))
-
-            print(f'Redacting {input_file} -> {output_file.resolve()}')
-            output_to_file(redacted_txt, output_file)
-
-        print(f'Stats added to {settings.stats}\n')
-
-    if settings.stats == 'stdout' or settings.stats == 'stderr':
-        output_to_std("\n\n".join(process_stats), settings.stats)
-    else:
-        output_file = Path(os.path.join(os.getcwd(), settings.stats))
-        output_to_file("\n\n".join(process_stats), output_file)
-
-
-def output_to_std(content: str, output: str):
-    """Writes the content to standard files (stdout ot stderr)
-
-    Parameters
-    ----------
-    content : Content to be written
-    output  : Special file to which content has to be written
-    """
-
-    old_stdout_state = sys.stdout
-    if output == 'stderr':
-        sys.stdout = sys.stderr
-
-    sys.stdout.write(content)
-    sys.stdout.write('\n\n')
-
-    sys.stdout = old_stdout_state
-
-
-def output_to_file(content: str, output_file: Path):
-    """Writes the content to the given file
-
-    Parameters
-    ----------
-    content     : Content to be written
-    output_file : File to which content has to be written
-    """
-
-    with open(output_file.resolve(), 'w', encoding='utf-8') as out_f:
-        out_f.write(content)
-
-
-if __name__ == '__main__':
-    arg_parser = argparse.ArgumentParser(
-        description='Redacts sensitive content in a given file.')
-    arg_parser.add_argument(
-        "--input",
-        required=True,
-        action="append",
-        help="<Required> glob of input files (eg:'*.txt')")
-    arg_parser.add_argument(
-        "--output",
-        required=True,
-        help="<Required> directory to store redacted files")
-    arg_parser.add_argument(
-        "--names",
-        action="store_true",
-        default=False,
-        help="redacts names (Human, Location and Organizations)")
-    arg_parser.add_argument(
-        "--genders",
-        action="store_true",
-        default=False,
-        help="redacts gender revealing words (He, She, Father, Mother)")
-    arg_parser.add_argument(
-        "--dates",
-        action="store_true",
-        default=False,
-        help="redacts dates (Feb 3rd, 03/02/2022, February 3, 2022)")
-    arg_parser.add_argument(
-        "--phones",
-        action="store_true",
-        default=False,
-        help="redacts phone numbers (only 10 digit phone numbers)")
-    arg_parser.add_argument(
-        "--address",
-        action="store_true",
-        default=False,
-        help="redacts US based physical addresses")
-    arg_parser.add_argument(
-        "--concept",
-        action='append',
-        help='<Required> redacts sentence based on given concept',
-        required=True)
-    arg_parser.add_argument(
-        "--stats",
-        required=True,
-        help="<Required> mode to show (stdout, stderr) or save redacted files")
-
-    args = arg_parser.parse_args()
-    settings = Settings.parse(vars(args))
-
-    try:
-        main(settings)
-    except Exception as e:
-        sys.stderr.write("Unexpected error occured!\n")
+if __name__ == "__main__":
+    main()
