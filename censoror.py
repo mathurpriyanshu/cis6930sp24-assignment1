@@ -1,160 +1,163 @@
 import argparse
 import glob
-import sys
 import os
+from pathlib import Path
+import sys
 
-from project1.main import *
+from project1 import redact_pipeline
+from project1.models import Settings
 
 
-def main(args):
-    # Getting list of input files
-    raw_files = []
-    for inp_glob in args.input:
-        raw_files += glob.glob(inp_glob)
+def main(settings: Settings):
+    """Redacts each file using project1 module
 
-    # Redacting each file
-    final_stats = ""
-    for raw_file in raw_files:
-        print("Processing", raw_file, "==>")
-        data = ""
+    Parameters
+    ----------
+    settings    : Parsed command line args as an instance of Settings class
+    """
+
+    # Getting input files
+    input_files = []
+    for i in settings.input:
+        input_files += glob.glob(i)
+
+    print('\nFiles processing ->', input_files, '\n')
+
+    process_stats = []
+    for input_file in input_files:
+        redacted_txt = ""
+
+        input_file_path = Path(input_file).resolve()
+        # Try-except block to catch any file access or file reading errors
         try:
-            with open(raw_file, 'r') as f:
-                data = f.read()
-        except:
-            print(f"{raw_file} file that is given can't be read, and so it can't be redacted\n")
+            # Reads the content of the given file and starts the redaction
+            # process
+            with open(input_file_path, 'r') as in_f:
+                unredacted_txt = in_f.read()
+                redacted_txt, stats = redact_pipeline(
+                    unredacted_txt,
+                    redacts=settings.redacts,
+                    concepts=settings.concepts)
+
+                process_stats.append(
+                    f"========== Stats:{input_file} ==========\n{stats}")
+
+        except BaseException:
+            # Exception is written to StdErr and loop is continued for other
+            # remaining files
+            sys.stderr.write(f'Could not read and redact {input_file}\n\n')
             continue
-        
-        #To count redacted ones
-        redact_counts = {}
-        #To collect redacted quantities
-        redact_list = {}
-        
-        if args.concept:
-            data,concept_list = redact_concept(data,args.concept)
-            redact_counts["concept_count"] = len(concept_list)
-            redact_list["concept_list"] = concept_list
 
-        if args.address:
-            data,address_list = redact_address(data)
-            redact_counts["address_count"] = len(address_list)
-            redact_list["address_list"] = address_list
-
-        if args.names:
-            data, names_list = redact_names(data)
-            redact_counts["names_count"] = len(names_list)
-            redact_list["names_list"] = names_list
-
-        if args.dates:
-            data,dates_list = redact_dates(data)
-            redact_counts["dates_count"] = len(dates_list)
-            redact_list["dates_list"] = dates_list
-
-        if args.phones:
-            data,phones_list = redact_phones(data)
-            redact_counts["phones_count"] = len(phones_list)
-            redact_list["phones_list"] = phones_list
-
-        if args.genders:
-            data,genders_list = redact_genders(data)
-            redact_counts["genders_count"] = len(genders_list)
-            redact_list["genders_list"] = genders_list
-        
-        if args.output == 'stdout' or args.output == 'stderr':
-            if args.output == 'stdout':
-                sys.stdout.write(data)
-                sys.stdout.write('\n')
-            
-            if args.output == 'stderr':
-                sys.stderr.write(data)
-                sys.stderr.write('\n')
+        if settings.output == 'stdout' or settings.output == 'stderr':
+            print(f'Redacting {input_file} ->')
+            output_to_std(redacted_txt, settings.output)
         else:
-            write_to_files(raw_file, data)
+            # Generating output path and creating any parent folders in the path
+            # irrespective of OS (Windows or Posix)
+            output_file_folder = Path(
+                os.path.join(
+                    settings.output,
+                    input_file)).parent
+            output_file_folder.resolve().mkdir(parents=True, exist_ok=True)
+            output_file = Path(os.path.join(
+                output_file_folder,
+                f'{Path(input_file).stem}.redacted'))
 
-        stats=redact_stats(args, redact_counts, redact_list)
-        final_stats += f"------Data is redacted from {raw_file} file, below is the statistics of the redactions made in file------\n" + stats + "\n\n"
+            print(f'Redacting {input_file} -> {output_file.resolve()}')
+            output_to_file(redacted_txt, output_file)
 
-    if args.stats == 'stdout':
-        sys.stdout.write("\n-----------Data is redacted from {raw_file} file, below is the statistics of the redactions made in file---------------\n")
-        sys.stdout.write(final_stats)
-        sys.stdout.write('\n')
-    
-    if args.stats == 'stderr':
-        sys.stdout.write("\n-----------Data is redacted from {raw_file} file, below is the statistics of the redactions made in file---------------\n")
-        sys.stderr.write(final_stats)
-        sys.stderr.write('\n')
+        print(f'Stats added to {settings.stats}\n')
+
+    if settings.stats == 'stdout' or settings.stats == 'stderr':
+        output_to_std("\n\n".join(process_stats), settings.stats)
     else:
-        write_to_files_stats(args.stats, final_stats)        
+        output_file = Path(os.path.join(os.getcwd(), settings.stats))
+        output_to_file("\n\n".join(process_stats), output_file)
 
-        
-def write_to_files(raw_file, data):
-    if not os.path.exists(args.output):
-        os.mkdir(args.output)
-    
-    out_file_name = f"{raw_file}.redacted"
 
-    sub_folders = out_file_name.split('/')[:-1]
-    for sub_folder in sub_folders:
-        sub_folder_path = os.path.join(args.output, sub_folder)
-        if not os.path.exists(sub_folder_path):
-            os.mkdir(sub_folder_path)
+def output_to_std(content: str, output: str):
+    """Writes the content to standard files (stdout ot stderr)
 
-    with open(os.path.join(args.output, out_file_name), 'w') as f:
-        f.write(data)
+    Parameters
+    ----------
+    content : Content to be written
+    output  : Special file to which content has to be written
+    """
 
-    print(f"Saved to {os.path.join(args.output, out_file_name)}")
+    old_stdout_state = sys.stdout
+    if output == 'stderr':
+        sys.stdout = sys.stderr
 
-def write_to_files_stats(raw_file, stats):
-    raw_file_path = os.path.join(os.getcwd(), raw_file)
+    sys.stdout.write(content)
+    sys.stdout.write('\n\n')
 
-    with open(raw_file_path, 'w') as f:
-        f.write(stats)
+    sys.stdout = old_stdout_state
 
-    print(f"Stats to {raw_file_path}")
-    print("\n")
 
-def redact_stats(args, redact_counts, redact_list):
-    stats_list = []
-    
+def output_to_file(content: str, output_file: Path):
+    """Writes the content to the given file
 
-    if vars(args)['names']:
-        stats_list.append(f"In total {redact_counts['names_count']} names got redacted.")
-        stats_list.append(f"\tThe names that got redacted are {redact_list['names_list']} ")
+    Parameters
+    ----------
+    content     : Content to be written
+    output_file : File to which content has to be written
+    """
 
-    if vars(args)['dates']:
-        stats_list.append(f"In total {redact_counts['dates_count']} dates got redacted.")
-        stats_list.append(f"\tThe dates that got redacted are {redact_list['dates_list']} ")
+    with open(output_file.resolve(), 'w', encoding='utf-8') as out_f:
+        out_f.write(content)
 
-    if vars(args)['phones']:
-        stats_list.append(f"In total {redact_counts['phones_count']} phone numbers got redacted.")
-        stats_list.append(f"\tThe phones that got redacted are {redact_list['phones_list']} ")
 
-    if vars(args)['genders']:
-        stats_list.append(f"In total {redact_counts['genders_count']} genders got redacted.")
-        stats_list.append(f"\tThe genders that got redacted are {redact_list['genders_list']} ")
+if __name__ == '__main__':
+    arg_parser = argparse.ArgumentParser(
+        description='Redacts sensitive content in a given file.')
+    arg_parser.add_argument(
+        "--input",
+        required=True,
+        action="append",
+        help="<Required> glob of input files (eg:'*.txt')")
+    arg_parser.add_argument(
+        "--output",
+        required=True,
+        help="<Required> directory to store redacted files")
+    arg_parser.add_argument(
+        "--names",
+        action="store_true",
+        default=False,
+        help="redacts names (Human, Location and Organizations)")
+    arg_parser.add_argument(
+        "--genders",
+        action="store_true",
+        default=False,
+        help="redacts gender revealing words (He, She, Father, Mother)")
+    arg_parser.add_argument(
+        "--dates",
+        action="store_true",
+        default=False,
+        help="redacts dates (Feb 3rd, 03/02/2022, February 3, 2022)")
+    arg_parser.add_argument(
+        "--phones",
+        action="store_true",
+        default=False,
+        help="redacts phone numbers (only 10 digit phone numbers)")
+    arg_parser.add_argument(
+        "--address",
+        action="store_true",
+        default=False,
+        help="redacts US based physical addresses")
+    arg_parser.add_argument(
+        "--concept",
+        action='append',
+        help='<Required> redacts sentence based on given concept',
+        required=True)
+    arg_parser.add_argument(
+        "--stats",
+        required=True,
+        help="<Required> mode to show (stdout, stderr) or save redacted files")
 
-    if vars(args)['address']:
-        stats_list.append(f"In total {redact_counts['address_count']} address/es got redacted.")
-        stats_list.append(f"\tThe address/es that got redacted are {redact_list['address_list']} ")
-        
-    if vars(args)['concept']:
-        stats_list.append(f"In total {redact_counts['concept_count']} concept sentences got redacted.")
-        stats_list.append(f"\tThe concept statements that got redacted are {redact_list['concept_list']} ")
-    
-    return "\n".join(stats_list)
+    args = arg_parser.parse_args()
+    settings = Settings.parse(vars(args))
 
-if __name__=='__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--input', required = True, type = str, action = "append", help='input file is taken through this argument')
-    parser.add_argument('--names', action = "store_true", help='names from the input file gets redacted')
-    parser.add_argument('--dates', action = "store_true", help='dates from the input files get redacted')
-    parser.add_argument('--phones', action = "store_true", help='phone numbers from the input files get redacted')
-    parser.add_argument('--genders', action = "store_true", help='gender revealing words from the input files get redacted')
-    parser.add_argument('--address', action = "store_true", help='addresses in the input files get redacted')
-    parser.add_argument('--concept', type = str, action = "append", help='concept statements in the input files get redacted')
-    parser.add_argument('--output',required = True, help='the printing format of input file output  is specified')
-    parser.add_argument('--stats', required = True, help='the printing format of input file summary is specified')
-
-    args = parser.parse_args()
-    
-    
-    main(args)
+    try:
+        main(settings)
+    except Exception as e:
+        sys.stderr.write("Unexpected error occured!\n")
