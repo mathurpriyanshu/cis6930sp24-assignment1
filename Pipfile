@@ -1,0 +1,16 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+spacy = "*"
+de_core_news_sm = { file = 'https://github.com/explosion/spacy-models/releases/download/de_core_news_sm-2.0.0/de_core_news_sm-2.0.0.tar.gz' }
+nltk = "*"
+commonregex = "*"
+pyap = "*"
+
+[dev-packages]
+
+[requires]
+python_version = "3.11"
