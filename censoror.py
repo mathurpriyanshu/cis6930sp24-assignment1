@@ -74,7 +74,7 @@ def main():
     args = parser.parse_args()
     print("Parsed arguments:", args)
     
-    input_files = glob.glob("./docs/input/*.txt")
+    input_files = glob.glob(args.input)
     output_dir = glob.glob(args.output)
     censor_flags = []
     if args.names:
